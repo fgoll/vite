@@ -25,6 +25,7 @@ import {
   indexHtmlMiddleware
 } from './middlewares/indexHtml'
 import history from 'connect-history-api-fallback'
+import { decodeURIMiddleware } from './middlewares/decodeURI'
 import {
   serveRawFsMiddleware,
   servePublicMiddleware,
@@ -49,7 +50,7 @@ import { DepOptimizationMetadata, optimizeDeps } from '../optimizer'
 import { ssrLoadModule } from '../ssr/ssrModuleLoader'
 import { resolveSSRExternal } from '../ssr/ssrExternal'
 import { ssrRewriteStacktrace } from '../ssr/ssrStacktrace'
-import { createMissingImpoterRegisterFn } from '../optimizer/registerMissing'
+import { createMissingImporterRegisterFn } from '../optimizer/registerMissing'
 
 export interface ServerOptions {
   host?: string
@@ -227,7 +228,7 @@ export interface ViteDevServer {
    */
   _optimizeDepsMetadata: DepOptimizationMetadata | null
   /**
-   * Deps that are extenralized
+   * Deps that are externalized
    * @internal
    */
   _ssrExternals: string[] | null
@@ -275,13 +276,17 @@ export async function createServer(
     ignored: ['**/node_modules/**', '**/.git/**', ...ignored],
     ignoreInitial: true,
     ignorePermissionErrors: true,
+    disableGlobbing: true,
     ...watchOptions
   }) as FSWatcher
 
   const plugins = config.plugins
   const container = await createPluginContainer(config, watcher)
   const moduleGraph = new ModuleGraph(container)
-  const closeHttpServer = createSeverCloseFn(httpServer)
+  const closeHttpServer = createServerCloseFn(httpServer)
+
+  // eslint-disable-next-line prefer-const
+  let exitProcess: () => void
 
   const server: ViteDevServer = {
     config: config,
@@ -322,6 +327,12 @@ export async function createServer(
       return startServer(server, port, isRestart)
     },
     async close() {
+      process.off('SIGTERM', exitProcess)
+
+      if (!process.stdin.isTTY) {
+        process.stdin.off('end', exitProcess)
+      }
+
       await Promise.all([
         watcher.close(),
         ws.close(),
@@ -339,7 +350,7 @@ export async function createServer(
 
   server.transformIndexHtml = createDevHtmlTransformFn(server)
 
-  const exitProcess = async () => {
+  exitProcess = async () => {
     try {
       await server.close()
     } finally {
@@ -401,7 +412,7 @@ export async function createServer(
   // proxy
   const { proxy } = serverConfig
   if (proxy) {
-    middlewares.use(proxyMiddleware(server))
+    middlewares.use(proxyMiddleware(httpServer, config))
   }
 
   // base
@@ -414,6 +425,9 @@ export async function createServer(
 
   // hmr reconnect ping
   middlewares.use('/__vite_ping', (_, res) => res.end('pong'))
+
+  //decode request url
+  middlewares.use(decodeURIMiddleware())
 
   // serve static files under /public
   // this applies before the transform middleware so that these files are served
@@ -469,14 +483,14 @@ export async function createServer(
   middlewares.use(errorMiddleware(server, middlewareMode))
 
   const runOptimize = async () => {
-    if (config.optimizeCacheDir) {
+    if (config.cacheDir) {
       server._isRunningOptimizer = true
       try {
         server._optimizeDepsMetadata = await optimizeDeps(config)
       } finally {
         server._isRunningOptimizer = false
       }
-      server._registerMissingImport = createMissingImpoterRegisterFn(server)
+      server._registerMissingImport = createMissingImporterRegisterFn(server)
     }
   }
 
@@ -499,6 +513,7 @@ export async function createServer(
       serverConfig.port = (httpServer.address() as AddressInfo).port
     })
   } else {
+    await container.buildStart({})
     await runOptimize()
   }
 
@@ -612,7 +627,7 @@ async function startServer(
   })
 }
 
-function createSeverCloseFn(server: http.Server | null) {
+function createServerCloseFn(server: http.Server | null) {
   if (!server) {
     return () => {}
   }

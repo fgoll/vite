@@ -9,7 +9,7 @@ import { transformImportGlob } from '../importGlob'
 
 /**
  * A flag for injected helpers. This flag will be set to `false` if the output
- * target is not native es - so that injected helper logic can be conditinally
+ * target is not native es - so that injected helper logic can be conditionally
  * dropped.
  */
 export const isModernFlag = `__VITE_IS_MODERN__`
@@ -96,13 +96,16 @@ export function buildImportAnalysisPlugin(config: ResolvedConfig): Plugin {
     },
 
     async transform(source, importer) {
-      if (importer.includes('node_modules')) {
+      if (
+        importer.includes('node_modules') &&
+        !source.includes('import.meta.glob')
+      ) {
         return
       }
 
       await init
 
-      let imports: ImportSpecifier[] = []
+      let imports: readonly ImportSpecifier[] = []
       try {
         imports = parseImports(source)[0]
       } catch (e) {
@@ -138,7 +141,9 @@ export function buildImportAnalysisPlugin(config: ResolvedConfig): Plugin {
             start,
             importer,
             index,
-            config.root
+            config.root,
+            undefined,
+            ssr
           )
           str().prepend(importsString)
           str().overwrite(expStart, endIndex, exp)
@@ -230,8 +235,11 @@ export function buildImportAnalysisPlugin(config: ResolvedConfig): Plugin {
               if (url[0] === `"` && url[url.length - 1] === `"`) {
                 const ownerFilename = chunk.fileName
                 // literal import - trace direct imports and add to deps
+                const analyzed: Set<string> = new Set<string>()
                 const addDeps = (filename: string) => {
                   if (filename === ownerFilename) return
+                  if (analyzed.has(filename)) return
+                  analyzed.add(filename)
                   const chunk = bundle[filename] as OutputChunk | undefined
                   if (chunk) {
                     deps.add(config.base + chunk.fileName)

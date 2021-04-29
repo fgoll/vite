@@ -5,7 +5,8 @@ import {
   getColor,
   isBuild,
   listAssets,
-  readManifest
+  readManifest,
+  readFile
 } from '../../testUtils'
 
 const assetMatch = isBuild
@@ -81,6 +82,20 @@ describe('css url() references', () => {
     expect(await getBg('.css-url-relative')).toMatch(assetMatch)
   })
 
+  test('image-set relative', async () => {
+    let imageSet = await getBg('.css-image-set-relative')
+    imageSet.split(', ').forEach((s) => {
+      expect(s).toMatch(assetMatch)
+    })
+  })
+
+  test('image-set without the url() call', async () => {
+    let imageSet = await getBg('.css-image-set-without-url-call')
+    imageSet.split(', ').forEach((s) => {
+      expect(s).toMatch(assetMatch)
+    })
+  })
+
   test('relative in @import', async () => {
     expect(await getBg('.css-url-relative-at-imported')).toMatch(assetMatch)
   })
@@ -117,6 +132,20 @@ describe('css url() references', () => {
   }
 })
 
+describe('image', () => {
+  test('srcset', async () => {
+    const img = await page.$('.img-src-set')
+    const srcset = await img.getAttribute('srcset')
+    srcset.split(', ').forEach((s) => {
+      expect(s).toMatch(
+        isBuild
+          ? /\/foo\/assets\/asset\.\w{8}\.png \d{1}x/
+          : /\.\/nested\/asset\.png \d{1}x/
+      )
+    })
+  })
+})
+
 describe('svg fragments', () => {
   // 404 is checked already, so here we just ensure the urls end with #fragment
   test('img url', async () => {
@@ -142,7 +171,7 @@ test('?raw import', async () => {
 })
 
 test('?url import', async () => {
-  const src = `console.log('hi')\n`
+  const src = readFile('foo.js')
   expect(await page.textContent('.url')).toMatch(
     isBuild
       ? `data:application/javascript;base64,${Buffer.from(src).toString(
